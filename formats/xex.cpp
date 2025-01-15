@@ -273,6 +273,77 @@ bool XEXFile::load(void* file)
   return true;
 }
 
+bool XEXFile::exportXex(void* file)
+{
+    // Write XEX Header
+    xex::XexHeader headerBe;
+    memcpy(&headerBe, &xex_header_, sizeof(xex::XexHeader));
+
+    headerBe.endian_swap();
+    write(&headerBe, sizeof(xex::XexHeader), 1, file);
+
+    // Write optional header keyvalues
+
+    int i = 0;
+    for (std::pair<uint32_t, uint32_t> opt_header : directory_entries_)
+    {
+        auto dirEntry = reinterpret_cast<xex::XexDirectoryEntry*>(&opt_header);
+
+        uint32_t keyBe = xe::byte_swap(dirEntry->Key.value);
+        uint32_t valBe = xe::byte_swap(dirEntry->Value.value);
+
+        write(&keyBe, sizeof(uint32_t), 1, file);
+        write(&valBe, sizeof(uint32_t), 1, file);
+
+        uint32_t optHeaderOffset = dirEntry->Key.value & 0xFF;
+        bool isOffset = (dirEntry->Key.value & 0xFF) == 0xFF;
+
+        if (isOffset)
+        {
+            seek(file, dirEntry->Key.value, SEEK_SET);
+            uint32_t size = *(uint32_t*)opt_header_ptr(dirEntry->Key.value);
+
+            // Size is number of DWORDs
+            if ((size & 0xFF) != 0xFF)
+            {
+                size *= sizeof(uint32_t);
+            }
+
+            write(opt_header_ptr(dirEntry->Key.value), size, 1, file);
+            seek(file, sizeof(xex::XexHeader) + sizeof(xex::XexDirectoryEntry) * (i + 1), SEEK_SET);
+        }
+
+        ++i;
+    }
+
+    // Write Security Info
+    if (has_secinfo_)
+    {
+        seek(file, xe::byte_swap(xex_header_.SecurityInfo.value), SEEK_SET);
+        auto offset = tell(file);
+
+        xex2::SecurityInfo securityBe;
+        memcpy(&securityBe, &security_info_, sizeof(xex2::SecurityInfo));
+
+        securityBe.endian_swap();
+        write(&securityBe, sizeof(xex2::SecurityInfo), 1, file);
+
+        xex::HvPageInfo pageInfoBe;
+        uint32_t pageDescriptorCountLe = xe::byte_swap(security_info_.PageDescriptorCount.value);
+        for (uint32_t i = 0; i < pageDescriptorCountLe; i++)
+        {
+            memcpy(&pageInfoBe, &page_descriptors_[i], sizeof(xex::HvPageInfo));
+            pageInfoBe.endian_swap();
+
+            write(&pageInfoBe, sizeof(xex::HvPageInfo), 1, file);
+        }
+    }
+
+    auto offset = tell(file);
+
+    return true;
+}
+
 // Reads import libraries & function info from XEX import table
 bool XEXFile::read_imports(void* file)
 {

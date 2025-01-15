@@ -882,6 +882,7 @@ int main(int argc, char* argv[])
     ("m,listmem", "Print executable info & memory pages")
     ("i,imports", "Print import libraries & functions")
     ("b,basefile", "Dump basefile from XEX", cxxopts::value<std::string>())
+    ("r,replacebase", "Replace basefile in XEX", cxxopts::value<std::string>())
     ("d,dumpres", "Dump all resources to a dir (can be '.')", cxxopts::value<std::string>())
     ("v,verbose", "Enables verbose XEXFile debug output")
     ("a,address", "Convert a virtual memory address to file offset, or vice-versa", cxxopts::value<uint32_t>())
@@ -1009,6 +1010,26 @@ int main(int argc, char* argv[])
         printf("Entry Point:     0x%08X\n", xex.entry_point());
       }
     }
+  }
+
+  if (result.count("r"))
+  {
+      auto& basefile = result["r"].as<std::string>();
+      FILE* input;
+      auto baseResult = fopen_s(&input, basefile.c_str(), "rb");
+      if (baseResult != 0 || !input)
+      {
+          printf("Error %d opening basefile %s for read\n", baseResult, basefile.c_str());
+      }
+      else
+      {
+          fflush(input);
+          std::string filePathExport = filepath + ".export";
+          FILE* exportF;
+          auto exportResult = fopen_s(&exportF, filePathExport.c_str(), "wb");
+          xex.exportXex(exportF);
+          fclose(exportF);
+      }
   }
 
   if (result.count("d"))

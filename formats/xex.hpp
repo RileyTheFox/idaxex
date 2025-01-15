@@ -21,6 +21,8 @@
 
 // Function pointer types, these let us support both IDA's IO functions & regular C's IO
 typedef size_t(*read_fn)(void* buffer, size_t element_size, size_t element_count, void* file);
+typedef size_t(*write_fn)(void* buffer, size_t element_size, size_t element_count, void* file);
+
 typedef int(*seek_fn)(void* file, long long offset, int origin);
 typedef long long(*tell_fn)(void* file);
 typedef int(*dbgmsg_fn)(const char* format, ...);
@@ -52,6 +54,7 @@ class XEXFile
 {
   // IO function pointers
   read_fn read = nullptr;
+  write_fn write = nullptr;
   seek_fn seek = nullptr;
   tell_fn tell = nullptr;
   dbgmsg_fn dbgmsg = nullptr;
@@ -131,8 +134,10 @@ public:
 #ifndef IDALDR
 #ifdef _MSC_VER
     read = (read_fn)fread; seek = (seek_fn)_fseeki64; tell = (tell_fn)_ftelli64; dbgmsg = stdio_msg;
+    write = (write_fn)fwrite; seek = (seek_fn)_fseeki64; tell = (tell_fn)_ftelli64; dbgmsg = stdio_msg;
 #else
     read = (read_fn)fread; seek = (seek_fn)fseeko64; tell = (tell_fn)ftello64; dbgmsg = stdio_msg;
+    write = (write_fn)fwrite; seek = (seek_fn)fseeko64; tell = (tell_fn)ftello64; dbgmsg = stdio_msg;
 #endif
 #endif
   }
@@ -144,6 +149,8 @@ public:
 
   // Loads in the XEX - note that "file" should be a FILE object, not a pointer to raw data!
   bool load(void* file);
+  // Exports the XEXFile - note that "file" should be a FILE object, not a pointer to raw data!
+  bool exportXex(void* file);
 
   const xex::XexHeader& header() { return xex_header_; }
   const xex2::SecurityInfo& security_info() { return security_info_; }
