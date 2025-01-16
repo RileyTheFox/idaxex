@@ -119,9 +119,15 @@ class XEXFile
   uint32_t verify_secinfo(void* file);
 
   bool read_basefile(void* file, int key_index);
+
   bool read_basefile_raw(void* file, bool encrypted);
+  bool write_basefile_raw(void* file, bool encrypted);
+
   bool read_basefile_uncompressed(void* file, bool encrypted);
+  bool write_basefile_uncompressed(void* file, bool encrypted);
+
   bool read_basefile_compressed(void* file, bool encrypted);
+  bool write_basefile_compressed(void* file, bool encrypted);
 
   bool basefile_verify();
 
@@ -133,8 +139,23 @@ public:
   XEXFile() { 
 #ifndef IDALDR
 #ifdef _MSC_VER
-    read = (read_fn)fread; seek = (seek_fn)_fseeki64; tell = (tell_fn)_ftelli64; dbgmsg = stdio_msg;
-    write = (write_fn)fwrite; seek = (seek_fn)_fseeki64; tell = (tell_fn)_ftelli64; dbgmsg = stdio_msg;
+      read = (read_fn)fread;
+      write = [](void* buffer, size_t element_size, size_t element_count, void* _file) -> size_t
+          {
+              FILE* file = (FILE*)_file;
+              size_t before = _ftelli64(file);
+              size_t written = fwrite(buffer, element_size, element_count, file);
+              size_t after = _ftelli64(file);
+              return after - before;
+          };
+      seek = [](void* _file, long long offset, int origin) -> int
+          {
+              FILE* file = (FILE*)_file;
+              _fseeki64(file, offset, origin);
+              return _ftelli64(file);
+          };
+      tell = (tell_fn)_ftelli64;
+      dbgmsg = stdio_msg;
 #else
     read = (read_fn)fread; seek = (seek_fn)fseeko64; tell = (tell_fn)ftello64; dbgmsg = stdio_msg;
     write = (write_fn)fwrite; seek = (seek_fn)fseeko64; tell = (tell_fn)ftello64; dbgmsg = stdio_msg;
@@ -166,6 +187,8 @@ public:
 
   // Length of the pe_data member, not the same as image_size!
   size_t pe_data_length() { return pe_data_.size(); }
+
+  bool replace_basefile(std::vector<uint8_t>& basefileNew);
 
   bool basefile_is_pe() {
     return pe_data_length() > 4 && *(uint16_t*)pe_data() == EXE_MZ_SIGNATURE;

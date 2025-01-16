@@ -154,12 +154,14 @@ bool XEXFile::load(void* file)
   {
     if (header().Magic != MAGIC_XEX2D)
     {
-      execution_id_->endian_swap();
+        // why, this messes with the pointer. just make a copy
+      //execution_id_->endian_swap();
     }
     else
     {
       auto* exec_2d = (xex_opt::xex2d::XexExecutionId*)execution_id_;
-      exec_2d->endian_swap();
+      // no
+      //exec_2d->endian_swap();
     }
   }
 
@@ -282,45 +284,10 @@ bool XEXFile::exportXex(void* file)
     headerBe.endian_swap();
     write(&headerBe, sizeof(xex::XexHeader), 1, file);
 
-    // Write optional header keyvalues
-
-    int i = 0;
-    for (std::pair<uint32_t, uint32_t> opt_header : directory_entries_)
-    {
-        auto dirEntry = reinterpret_cast<xex::XexDirectoryEntry*>(&opt_header);
-
-        uint32_t keyBe = xe::byte_swap(dirEntry->Key.value);
-        uint32_t valBe = xe::byte_swap(dirEntry->Value.value);
-
-        write(&keyBe, sizeof(uint32_t), 1, file);
-        write(&valBe, sizeof(uint32_t), 1, file);
-
-        uint32_t optHeaderOffset = dirEntry->Key.value & 0xFF;
-        bool isOffset = (dirEntry->Key.value & 0xFF) == 0xFF;
-
-        if (isOffset)
-        {
-            seek(file, dirEntry->Key.value, SEEK_SET);
-            uint32_t size = *(uint32_t*)opt_header_ptr(dirEntry->Key.value);
-
-            // Size is number of DWORDs
-            if ((size & 0xFF) != 0xFF)
-            {
-                size *= sizeof(uint32_t);
-            }
-
-            write(opt_header_ptr(dirEntry->Key.value), size, 1, file);
-            seek(file, sizeof(xex::XexHeader) + sizeof(xex::XexDirectoryEntry) * (i + 1), SEEK_SET);
-        }
-
-        ++i;
-    }
-
     // Write Security Info
     if (has_secinfo_)
     {
         seek(file, xe::byte_swap(xex_header_.SecurityInfo.value), SEEK_SET);
-        auto offset = tell(file);
 
         xex2::SecurityInfo securityBe;
         memcpy(&securityBe, &security_info_, sizeof(xex2::SecurityInfo));
@@ -339,7 +306,81 @@ bool XEXFile::exportXex(void* file)
         }
     }
 
-    auto offset = tell(file);
+    // Write optional headers
+
+    int i = 0;
+    long long highestOffset = 0;
+    for (std::pair<uint32_t, uint32_t> opt_header : directory_entries_)
+    {
+        seek(file, sizeof(xex::XexHeader) + sizeof(xex::XexDirectoryEntry) * (i++), SEEK_SET);
+        auto dirEntry = reinterpret_cast<xex::XexDirectoryEntry*>(&opt_header);
+
+        uint32_t headerId = dirEntry->Key.value;
+        uint32_t headerValue = dirEntry->Value.value;
+
+        uint32_t keyBe = xe::byte_swap(headerId);
+        uint32_t valBe = xe::byte_swap(headerValue);
+
+        write(&keyBe, sizeof(uint32_t), 1, file);
+        write(&valBe, sizeof(uint32_t), 1, file);
+
+        uint32_t loByte = headerId & 0xFF;
+        if (loByte > 1 && loByte < 0x7E || loByte == 255)
+        {
+            // Stores offset
+
+            seek(file, headerValue, SEEK_SET);
+
+            uint32_t* sizePtr = (uint32_t*)(xex_headers_.data() + headerValue);
+            uint32_t size = xe::byte_swap(*sizePtr);
+            if (loByte == 0xFF)
+            {
+                // Header data is size
+
+                write(xex_headers_.data() + headerValue, size, 1, file);
+            }
+            else
+            {
+                // Header data is num of DWORDs
+                size *= 4;
+
+                write(xex_headers_.data() + headerValue, size, 1, file);
+            }
+        }
+
+        auto currentOffset = tell(file);
+        if (currentOffset > highestOffset)
+        {
+            highestOffset = currentOffset;
+        }
+    }
+
+    // How to know where PE data begins without doing this??
+    seek(file, highestOffset, SEEK_SET);
+    auto a = tell(file);
+
+    // Write base file
+    xex_opt::XexDataFormat compressionFormat = xex_opt::XexDataFormat::Raw;
+    bool encrypt = false;
+
+    if (data_descriptor_)
+    {
+        compressionFormat = data_descriptor_->DataFormat();
+        encrypt = data_descriptor_->Flags;
+    }
+
+    if (compressionFormat == xex_opt::XexDataFormat::None)
+    {
+        write_basefile_raw(file, encrypt);
+    }
+    else if (compressionFormat == xex_opt::XexDataFormat::Raw)
+    {
+        write_basefile_uncompressed(file, encrypt);
+    }
+    else if (compressionFormat == xex_opt::XexDataFormat::Compressed)
+    {
+        write_basefile_compressed(file, encrypt);
+    }
 
     return true;
 }
@@ -820,6 +861,11 @@ bool XEXFile::read_basefile_raw(void* file, bool encrypted)
   return true;
 }
 
+bool XEXFile::write_basefile_raw(void* file, bool encrypted)
+{
+    return true;
+}
+
 // Reads (and optionally decrypts) the basefile from the XEX in uncompressed format
 bool XEXFile::read_basefile_uncompressed(void* file, bool encrypted)
 {
@@ -884,6 +930,35 @@ bool XEXFile::read_basefile_uncompressed(void* file, bool encrypted)
   // todo: verify block size sum == ImageSize ?
 
   return true;
+}
+
+bool XEXFile::write_basefile_uncompressed(void* file, bool encrypted)
+{
+    // TODO Encryption
+    int num_blocks = (data_descriptor_->Size - 8) / 8;
+    auto xex_blocks = std::make_unique<xex_opt::XexRawDataDescriptor[]>(num_blocks);
+
+    std::copy_n(
+        reinterpret_cast<xex_opt::XexRawDataDescriptor*>(xex_headers_.data() + directory_entries_[XEX_FILE_DATA_DESCRIPTOR_HEADER] + 8),
+        num_blocks,
+        xex_blocks.get());
+
+    uint32_t pePosition = 0;
+    for (int i = 0; i < num_blocks; i++)
+    {
+        uint32_t dataSize = xex_blocks[i].DataSize;
+        uint32_t zeroSize = xex_blocks[i].ZeroSize;
+
+        if(tell(file) == 0x8BD75C) 
+        {
+            printf("help");
+        }
+        write(pe_data_.data() + pePosition, 1, dataSize, file);
+
+        pePosition += dataSize;
+        pePosition += zeroSize;
+    }
+    return true;
 }
 
 // Reads (and optionally decrypts) the basefile from the XEX in LZX-compressed format
@@ -982,6 +1057,11 @@ end:
   return retcode == 0;
 }
 
+bool XEXFile::write_basefile_compressed(void* file, bool encrypted)
+{
+    return true;
+}
+
 // TODO: fix this to work with older XEX formats
 uint32_t XEXFile::xex_va_to_offset(uint32_t va)
 {
@@ -1065,6 +1145,19 @@ uint32_t XEXFile::xex_offset_to_va(uint32_t offset)
   }
 
   return 0;
+}
+
+bool XEXFile::replace_basefile(std::vector<uint8_t>& basefileNew)
+{
+    if (basefileNew.size() != pe_data_length())
+    {
+        return false;
+    }
+
+    // TODO Validate there's no data in the zero section in the new basefile
+
+    pe_data_ = basefileNew;
+    return true;
 }
 
 // Reads import libraries & function info from PE headers

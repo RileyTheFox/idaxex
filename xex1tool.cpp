@@ -1014,22 +1014,41 @@ int main(int argc, char* argv[])
 
   if (result.count("r"))
   {
-      auto& basefile = result["r"].as<std::string>();
+      auto& basefilePath = result["r"].as<std::string>();
       FILE* input;
-      auto baseResult = fopen_s(&input, basefile.c_str(), "rb");
-      if (baseResult != 0 || !input)
+
+      auto result = fopen_s(&input, basefilePath.c_str(), "rb");
+      if (result != 0 || !input)
       {
-          printf("Error %d opening basefile %s for read\n", baseResult, basefile.c_str());
+          printf("Error %d opening basefile %s for read\n", result, basefilePath.c_str());
       }
       else
       {
-          fflush(input);
-          std::string filePathExport = filepath + ".export";
-          FILE* exportF;
-          auto exportResult = fopen_s(&exportF, filePathExport.c_str(), "wb");
-          xex.exportXex(exportF);
-          fclose(exportF);
+          fseek(input, 0, SEEK_END);
+          auto fsize = ftell(input);
+          fseek(input, 0, SEEK_SET);
+
+          std::vector<uint8_t> basefile;
+          basefile.resize(fsize);
+          fread(basefile.data(), 1, fsize, input);
+
+          if (!xex.replace_basefile(basefile))
+          {
+              printf("Failed to replace basefile. Are they identical in size?");
+          }
+          else
+          {
+              std::string filePathExport = filepath + ".export";
+              FILE* exportF;
+              auto exportResult = fopen_s(&exportF, filePathExport.c_str(), "wb");
+              xex.exportXex(exportF);
+              fclose(exportF);
+
+              printf("Replaced basefile in %s with %s", filepath.c_str(), basefilePath.c_str());
+          }
       }
+
+
   }
 
   if (result.count("d"))
